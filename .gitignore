@@ -1,0 +1,18 @@
+# Segreti - non committare MAI
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Database locale (dati del bot, personali, non vanno su GitHub)
+*.db
+*.sqlite3
+
+# macOS
+.DS_Store
+
+# Cartella di appoggio per file da eliminare
+_to_delete/
