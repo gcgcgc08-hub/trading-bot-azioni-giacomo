@@ -1,1 +1,3 @@
 requests
+alpaca-py
+python-dotenv
