@@ -102,6 +102,23 @@ def inizializza_database():
         )
     """)
 
+    # FASE 8: tabella per le notizie scaricate dal feed RSS gratuito.
+    # 'link' e' UNIQUE apposta: e' quello che usiamo per capire se una
+    # notizia l'abbiamo gia' salvata in passato, cosi' non la duplichiamo
+    # ogni volta che il bot scarica di nuovo lo stesso feed (che contiene
+    # sempre anche le notizie piu' vecchie, non solo quelle nuove).
+    cursore.execute("""
+        CREATE TABLE IF NOT EXISTS notizie (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            data_ora_salvataggio TEXT NOT NULL,
+            simbolo TEXT NOT NULL,
+            titolo TEXT NOT NULL,
+            link TEXT NOT NULL UNIQUE,
+            data_pubblicazione TEXT,
+            fonte TEXT
+        )
+    """)
+
     connessione.commit()
     connessione.close()
 
@@ -362,3 +379,79 @@ def controlla_battito_cuore_scaduto(minuti_massimi=60):
     minuti_passati = (datetime.now() - data_ora_ultimo).total_seconds() / 60
     scaduto = minuti_passati > minuti_massimi
     return scaduto, minuti_passati
+
+
+def notizia_gia_salvata(link):
+    """
+    Controlla se questo link e' gia' stato salvato in passato. Ci serve
+    perche' ogni volta che scarichiamo il feed RSS troviamo di nuovo anche
+    le notizie vecchie: senza questo controllo le salveremmo (e stamperemmo)
+    piu' volte.
+    """
+    connessione = ottieni_connessione()
+    cursore = connessione.cursor()
+    cursore.execute("SELECT 1 FROM notizie WHERE link = ?", (link,))
+    esiste = cursore.fetchone() is not None
+    connessione.close()
+    return esiste
+
+
+def salva_notizia(simbolo, titolo, link, data_pubblicazione, fonte):
+    """Salva una notizia scaricata dal feed RSS."""
+    connessione = ottieni_connessione()
+    cursore = connessione.cursor()
+    cursore.execute(
+        """
+        INSERT INTO notizie (
+            data_ora_salvataggio, simbolo, titolo, link,
+            data_pubblicazione, fonte
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            datetime.now().isoformat(timespec="seconds"),
+            simbolo,
+            titolo,
+            link,
+            data_pubblicazione,
+            fonte,
+        ),
+    )
+    connessione.commit()
+    connessione.close()
+
+
+def mostra_notizie(simbolo=None, limite=10):
+    """
+    Stampa le ultime notizie salvate (le piu' recenti per prime).
+    Se 'simbolo' e' indicato, mostra solo le notizie di quel titolo.
+    """
+    connessione = ottieni_connessione()
+    cursore = connessione.cursor()
+    if simbolo:
+        cursore.execute(
+            """
+            SELECT data_pubblicazione, fonte, titolo, link FROM notizie
+            WHERE simbolo = ? ORDER BY id DESC LIMIT ?
+            """,
+            (simbolo, limite),
+        )
+    else:
+        cursore.execute(
+            """
+            SELECT data_pubblicazione, fonte, titolo, link FROM notizie
+            ORDER BY id DESC LIMIT ?
+            """,
+            (limite,),
+        )
+    righe = cursore.fetchall()
+    connessione.close()
+
+    print("\nUltime notizie salvate (dentro bot.db):")
+    if not righe:
+        print("  (nessuna notizia salvata finora)")
+    for data_pubblicazione, fonte, titolo, link in righe:
+        data_testo = data_pubblicazione if data_pubblicazione else "data sconosciuta"
+        fonte_testo = fonte if fonte else "fonte sconosciuta"
+        print(f"  [{data_testo}] ({fonte_testo}) {titolo}")
+        print(f"    {link}")
