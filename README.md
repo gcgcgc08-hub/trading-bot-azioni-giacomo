@@ -49,6 +49,13 @@ Aggiunte proposte e accettate:
 
 Ogni fase viene spiegata passo passo mentre la costruiamo: non serve sapere già programmare, il codice sarà commentato riga per riga.
 
+## Stato attuale
+
+- [x] Fase 1 — Connessione Alpaca + calendario di mercato + SQLite di base (`fase1_connessione_alpaca.py`, `database.py`) — testata, funzionante, pushata su GitHub
+- [x] Fase 2 — Risk management: stop loss, position sizing, circuit breaker giornaliero (`risk_management.py`, `fase2_demo_risk_management.py`) — testata, funzionante, pushata su GitHub
+- [ ] Fase 3 — Prima strategia (incrocio di medie mobili) con logging contestuale (`fase3_strategia_sma.py`) — appena scritta, da testare su Alpaca (dati reali, non posso testarla io perché non ho accesso a internet da qui)
+- [ ] Fase 5 (affidabilità), Fase 6 (watchdog/notifiche), Fase 7 (Oracle Cloud), Fase 8 (raffinamenti), Fase 9 (leva/reale) — non ancora iniziate
+
 ## Come far girare il codice
 
 Serve Python 3 installato sul tuo Mac (di solito c'è già; se non sei sicuro, dimmelo e controlliamo insieme).

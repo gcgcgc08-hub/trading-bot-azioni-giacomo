@@ -1,3 +1,4 @@
 requests
 alpaca-py
 python-dotenv
+pandas

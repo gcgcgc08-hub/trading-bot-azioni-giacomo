@@ -31,9 +31,9 @@ def ottieni_connessione():
 
 def inizializza_database():
     """
-    Crea la tabella 'snapshot_conto' se non esiste ancora.
-    Va richiamata all'inizio di ogni script, non fa danni se la tabella
-    esiste gia' (grazie a "IF NOT EXISTS").
+    Crea le tabelle se non esistono ancora.
+    Va richiamata all'inizio di ogni script, non fa danni se le tabelle
+    esistono gia' (grazie a "IF NOT EXISTS").
     """
     connessione = ottieni_connessione()
     cursore = connessione.cursor()
@@ -46,6 +46,28 @@ def inizializza_database():
             mercato_aperto INTEGER NOT NULL
         )
     """)
+
+    # FASE 3: tabella per il "logging contestuale" dei segnali della strategia.
+    # Non salviamo solo BUY/SELL/NONE, ma anche i numeri che hanno portato
+    # a quella decisione (le due medie mobili, di ieri e di oggi), cosi'
+    # possiamo sempre ricostruire "perche' il bot ha deciso cosi'" anche
+    # mesi dopo, senza dover ricordare a memoria la logica del codice.
+    cursore.execute("""
+        CREATE TABLE IF NOT EXISTS segnali (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            data_ora TEXT NOT NULL,
+            simbolo TEXT NOT NULL,
+            segnale TEXT NOT NULL,
+            prezzo_attuale REAL,
+            media_breve_oggi REAL,
+            media_lunga_oggi REAL,
+            media_breve_ieri REAL,
+            media_lunga_ieri REAL,
+            periodo_breve INTEGER,
+            periodo_lungo INTEGER
+        )
+    """)
+
     connessione.commit()
     connessione.close()
 
@@ -87,4 +109,67 @@ def mostra_storico():
         print(
             f"  {data_ora} - liquidita': {liquidita:>12,.2f} $ - "
             f"portafoglio: {valore:>12,.2f} $ - mercato {stato}"
+        )
+
+
+def salva_segnale(simbolo, segnale, prezzo_attuale, contesto, periodo_breve, periodo_lungo):
+    """
+    Salva un segnale generato dalla strategia, insieme a tutto il contesto
+    che lo ha motivato (logging contestuale).
+
+    'contesto' e' il dizionario restituito da decidi_segnale() dentro
+    fase3_strategia_sma.py: contiene le medie mobili di oggi e di ieri
+    (quando disponibili).
+    """
+    connessione = ottieni_connessione()
+    cursore = connessione.cursor()
+    cursore.execute(
+        """
+        INSERT INTO segnali (
+            data_ora, simbolo, segnale, prezzo_attuale,
+            media_breve_oggi, media_lunga_oggi,
+            media_breve_ieri, media_lunga_ieri,
+            periodo_breve, periodo_lungo
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            datetime.now().isoformat(timespec="seconds"),
+            simbolo,
+            segnale,
+            prezzo_attuale,
+            contesto.get("media_breve_oggi"),
+            contesto.get("media_lunga_oggi"),
+            contesto.get("media_breve_ieri"),
+            contesto.get("media_lunga_ieri"),
+            periodo_breve,
+            periodo_lungo,
+        ),
+    )
+    connessione.commit()
+    connessione.close()
+
+
+def mostra_segnali():
+    """Stampa tutti i segnali salvati finora, cosi' possiamo controllarli."""
+    connessione = ottieni_connessione()
+    cursore = connessione.cursor()
+    cursore.execute(
+        """
+        SELECT data_ora, simbolo, segnale, prezzo_attuale,
+               media_breve_oggi, media_lunga_oggi, periodo_breve, periodo_lungo
+        FROM segnali ORDER BY id
+        """
+    )
+    righe = cursore.fetchall()
+    connessione.close()
+
+    print("\nSegnali salvati finora (segnali dentro bot.db):")
+    for data_ora, simbolo, segnale, prezzo, mb, ml, pb, pl in righe:
+        prezzo_testo = f"{prezzo:,.2f} $" if prezzo is not None else "n/d"
+        mb_testo = f"{mb:,.2f}" if mb is not None else "n/d"
+        ml_testo = f"{ml:,.2f}" if ml is not None else "n/d"
+        print(
+            f"  {data_ora} - {simbolo}: {segnale}  "
+            f"(prezzo {prezzo_testo}, media{pb}gg={mb_testo}, media{pl}gg={ml_testo})"
         )
