@@ -88,6 +88,20 @@ def inizializza_database():
         )
     """)
 
+    # FASE 6: tabella per il "battito cardiaco" (heartbeat) del bot. Ad ogni
+    # esecuzione, il bot registra qui come e' andata: e' la base per il
+    # watchdog, cioe' per accorgersi se il bot ha smesso di funzionare
+    # (utile soprattutto quando girera' da solo, senza nessuno a guardare
+    # lo schermo).
+    cursore.execute("""
+        CREATE TABLE IF NOT EXISTS battiti_cuore (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            data_ora TEXT NOT NULL,
+            stato TEXT NOT NULL,
+            messaggio TEXT
+        )
+    """)
+
     connessione.commit()
     connessione.close()
 
@@ -282,3 +296,69 @@ def mostra_ordini():
             f"  {data_ora} - {simbolo} {lato} x{quantita} @ {prezzo_testo} "
             f"-> {stato} ({dettagli})"
         )
+
+
+def registra_battito_cuore(stato, messaggio=""):
+    """
+    Registra un "battito cardiaco": una riga che dice "il bot e' girato in
+    questo momento, ed e' andata cosi'". 'stato' e' una parola breve (es.
+    "ok", "errore", "fermato_circuit_breaker", "fermato_kill_switch");
+    'messaggio' e' una frase libera con qualche dettaglio in piu'.
+    """
+    connessione = ottieni_connessione()
+    cursore = connessione.cursor()
+    cursore.execute(
+        "INSERT INTO battiti_cuore (data_ora, stato, messaggio) VALUES (?, ?, ?)",
+        (datetime.now().isoformat(timespec="seconds"), stato, messaggio),
+    )
+    connessione.commit()
+    connessione.close()
+
+
+def ultimo_battito_cuore():
+    """
+    Restituisce (data_ora, stato, messaggio) dell'ultimo battito registrato,
+    oppure None se non ne e' ancora stato registrato nessuno.
+    """
+    connessione = ottieni_connessione()
+    cursore = connessione.cursor()
+    cursore.execute(
+        "SELECT data_ora, stato, messaggio FROM battiti_cuore ORDER BY id DESC LIMIT 1"
+    )
+    riga = cursore.fetchone()
+    connessione.close()
+    return riga
+
+
+def mostra_battiti_cuore():
+    """Stampa tutti i battiti cardiaci registrati finora, dal piu' vecchio al piu' recente."""
+    connessione = ottieni_connessione()
+    cursore = connessione.cursor()
+    cursore.execute("SELECT data_ora, stato, messaggio FROM battiti_cuore ORDER BY id")
+    righe = cursore.fetchall()
+    connessione.close()
+
+    print("\nBattiti cardiaci registrati finora (dentro bot.db):")
+    for data_ora, stato, messaggio in righe:
+        print(f"  {data_ora} - {stato}: {messaggio}")
+
+
+def controlla_battito_cuore_scaduto(minuti_massimi=60):
+    """
+    Controlla se e' passato troppo tempo dall'ultimo battito cardiaco
+    registrato. Utile soprattutto quando il bot girera' in automatico
+    (Fase 7): se dovrebbe far sentire il battito ogni tot minuti e non lo
+    fa piu' da troppo tempo, vuol dire che si e' bloccato o e' crashato
+    cosi' male da non essere nemmeno riuscito a segnalarlo.
+
+    Restituisce una coppia (scaduto: True/False, minuti_passati: numero
+    oppure None se non c'e' ancora nessun battito registrato).
+    """
+    ultimo = ultimo_battito_cuore()
+    if ultimo is None:
+        return True, None
+
+    data_ora_ultimo = datetime.fromisoformat(ultimo[0])
+    minuti_passati = (datetime.now() - data_ora_ultimo).total_seconds() / 60
+    scaduto = minuti_passati > minuti_massimi
+    return scaduto, minuti_passati

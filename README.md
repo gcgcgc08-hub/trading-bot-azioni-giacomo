@@ -54,8 +54,9 @@ Ogni fase viene spiegata passo passo mentre la costruiamo: non serve sapere già
 - [x] Fase 1 — Connessione Alpaca + calendario di mercato + SQLite di base (`fase1_connessione_alpaca.py`, `database.py`) — testata, funzionante, pushata su GitHub
 - [x] Fase 2 — Risk management: stop loss, position sizing, circuit breaker giornaliero (`risk_management.py`, `fase2_demo_risk_management.py`) — testata, funzionante, pushata su GitHub
 - [x] Fase 3 — Prima strategia (incrocio di medie mobili) con logging contestuale (`fase3_strategia_sma.py`) — testata, funzionante, pushata su GitHub
-- [ ] Fase 4 — Dal segnale all'ordine vero (paper trading): position sizing + circuit breaker + idempotenza degli ordini (client_order_id univoco) + retry sugli errori di rete + riconciliazione delle posizioni (`fase4_esecuzione_ordini.py`) — appena scritta, da testare su Alpaca (parte di rete non testabile da qui)
-- [ ] Fase 6 (watchdog/notifiche/kill switch), Fase 7 (Oracle Cloud), Fase 8 (raffinamenti), Fase 9 (leva/reale) — non ancora iniziate
+- [x] Fase 4 — Dal segnale all'ordine vero (paper trading): position sizing + circuit breaker + idempotenza degli ordini (client_order_id univoco) + retry sugli errori di rete + riconciliazione delle posizioni (`fase4_esecuzione_ordini.py`) — testata (parzialmente: non c'è ancora stato un vero BUY/SELL da verificare), pushata su GitHub
+- [ ] Fase 6 — Kill switch manuale (`kill_switch.py`, file STOP.txt), battito cardiaco/watchdog (`database.py`, tabella `battiti_cuore`), notifiche Telegram (`notifiche.py`), tutto collegato dentro `fase4_esecuzione_ordini.py` — appena scritta, da testare (in particolare le notifiche Telegram richiedono di configurare TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID nel `.env`)
+- [ ] Fase 7 (Oracle Cloud), Fase 8 (raffinamenti), Fase 9 (leva/reale) — non ancora iniziate
 
 ## Come far girare il codice
 

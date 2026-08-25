@@ -31,6 +31,32 @@ implementiamo la parte "Affidabilita'" della roadmap:
      Alpaca dice di avere in portafoglio con quello che ci aspettiamo,
      cosi' notiamo subito se qualcosa non torna.
 
+Aggiunte di questa versione (watchdog, kill switch, notifiche)
+------------------------------------------------------------------
+  4. KILL SWITCH MANUALE (kill_switch.py): prima di fare qualsiasi cosa,
+     il bot controlla se esiste un file "STOP.txt" nella cartella. Se
+     esiste, si ferma subito senza guardare nemmeno il conto. Per fermare
+     il bot in qualsiasi momento basta creare quel file.
+
+  5. BATTITO CARDIACO / WATCHDOG (registra_battito_cuore in database.py):
+     ad ogni esecuzione, il bot registra nel database come e' andata
+     (ok / errore / fermato per circuit breaker / fermato per kill switch).
+     Non e' ancora un "controllore" automatico che ti avvisa da solo se il
+     bot smette di far sentire il battito - quello arrivera' con Fase 7,
+     quando il bot girera' in un ciclo continuo - ma la base dati c'e' gia'.
+
+  6. NOTIFICHE VERE (notifiche.py): quando succede qualcosa di importante
+     (circuit breaker, ordine inviato, ordine fallito, errore imprevisto,
+     kill switch attivo), il bot prova a mandarti un messaggio Telegram.
+     Se le notifiche non sono ancora configurate, il bot continua a
+     funzionare comunque: le notifiche sono un extra utile, non devono mai
+     poter rompere la logica di trading.
+
+  Anche tutto il corpo dello script e' avvolto in un try/except: se
+  succede un errore che non avevamo previsto, il bot lo registra (battito
+  "errore" + notifica) invece di sparire in silenzio - importante perche'
+  un giorno girera' da solo, senza nessuno davanti allo schermo.
+
 Cose importanti da sapere su questo script
 --------------------------------------------
 - Per ora gestisce UN SOLO titolo alla volta (quello scelto in
@@ -75,7 +101,10 @@ from database import (
     client_order_id_gia_usato,
     salva_ordine,
     mostra_ordini,
+    registra_battito_cuore,
 )
+from kill_switch import kill_switch_attivo
+from notifiche import invia_notifica
 
 # Le chiavi sono gia' state lette da fase3_strategia_sma (che ha gia'
 # richiamato load_dotenv() e controllato che non fossero vuote): qui
@@ -161,137 +190,182 @@ def mostra_riconciliazione():
 if __name__ == "__main__":
     inizializza_database()
 
-    # ----- Passo 1: leggo il conto e controllo il circuit breaker -----
-    print("=== Passo 1: leggo il conto e controllo il limite di perdita giornaliera ===")
-
-    account = esegui_con_retry(lambda: client_trading.get_account(), descrizione="lettura conto")
-    orologio = esegui_con_retry(lambda: client_trading.get_clock(), descrizione="lettura calendario di mercato")
-
-    liquidita = float(account.cash)
-    valore_portafoglio = float(account.portfolio_value)
-
-    # Salviamo uno snapshot adesso: se e' il primo di oggi, diventa anche il
-    # nostro "valore di inizio giornata" per il circuit breaker.
-    salva_snapshot_conto(liquidita, valore_portafoglio, orologio.is_open)
-    valore_inizio_giornata = primo_valore_portafoglio_di_oggi()
-
-    deve_fermarsi, perdita_oggi = controlla_limite_perdita_giornaliera(
-        valore_inizio_giornata, valore_portafoglio
-    )
-    print(
-        f"Portafoglio: inizio giornata {valore_inizio_giornata:,.2f} $, "
-        f"adesso {valore_portafoglio:,.2f} $ (perdita di oggi: {perdita_oggi * 100:.2f}%)"
-    )
-
-    if deve_fermarsi:
-        print(
-            "\nCIRCUIT BREAKER ATTIVATO: la perdita di oggi ha superato la soglia. "
-            "Il bot NON piazza nuovi ordini oggi, in attesa di una revisione manuale."
-        )
+    # ----- Passo 0: kill switch manuale -----
+    # Prima di fare qualsiasi altra cosa, controlliamo se esiste il file
+    # STOP.txt: se c'e', qualcuno (tu, o il bot stesso in futuro) ha deciso
+    # di fermare tutto. Non guardiamo nemmeno il conto o il mercato.
+    if kill_switch_attivo():
+        messaggio = "Kill switch attivo (file STOP.txt presente): il bot non esegue nulla."
+        print(f"\n{messaggio}")
+        registra_battito_cuore("fermato_kill_switch", messaggio)
+        invia_notifica(f"Bot FERMATO: {messaggio}")
         raise SystemExit(0)
 
-    if not orologio.is_open:
-        print("\nIl mercato e' chiuso in questo momento: non ha senso piazzare ordini adesso. Mi fermo qui.")
-        raise SystemExit(0)
-
-    # ----- Passo 2: calcolo il segnale della strategia -----
-    print(f"\n=== Passo 2: calcolo il segnale per {SIMBOLO} ===")
-
-    prezzi = scarica_prezzi_di_chiusura()
-    media_breve, media_lunga = calcola_medie_mobili(prezzi)
-    segnale, contesto = decidi_segnale(media_breve, media_lunga)
-    prezzo_attuale = float(prezzi.iloc[-1])
-
-    salva_segnale(SIMBOLO, segnale, prezzo_attuale, contesto, PERIODO_BREVE, PERIODO_LUNGO)
-    print(f"Segnale: {segnale} (prezzo attuale: {prezzo_attuale:,.2f} $)")
-
-    if segnale == "NONE":
-        print("\nNessun incrocio oggi: non piazzo nessun ordine. Va bene cosi'.")
-        raise SystemExit(0)
-
-    # ----- Passo 3: controllo idempotenza e preparo l'ordine -----
-    client_order_id = genera_client_order_id(SIMBOLO, segnale)
-
-    if client_order_id_gia_usato(client_order_id):
-        print(
-            f"\nUn ordine con questo identificativo ('{client_order_id}') e' gia' "
-            "stato registrato oggi: non lo rimando, per evitare un ordine doppio "
-            "(idempotenza)."
-        )
-        raise SystemExit(0)
-
-    print(f"\n=== Passo 3: preparo l'ordine ({segnale}) ===")
-
-    if segnale == "BUY":
-        stop_loss = calcola_stop_loss(prezzo_attuale)
-        sizing = calcola_dimensione_posizione(valore_portafoglio, prezzo_attuale, stop_loss)
-        quantita = sizing["numero_azioni"]
-
-        print(
-            f"Stop loss teorico: {stop_loss:,.2f} $ | Azioni da comprare: {quantita} | "
-            f"Costo stimato: {sizing['costo_totale']:,.2f} $"
-        )
-
-        if quantita <= 0:
-            print("\nIl position sizing dice 0 azioni (capitale troppo piccolo per questo prezzo/rischio): non piazzo nulla.")
-            salva_ordine(SIMBOLO, segnale, 0, prezzo_attuale, client_order_id, "saltato", "position sizing = 0 azioni")
-            raise SystemExit(0)
-
-        if sizing["costo_totale"] > liquidita:
-            print(
-                f"\nAttenzione: servirebbero {sizing['costo_totale']:,.2f} $ ma hai solo "
-                f"{liquidita:,.2f} $ di liquidita' disponibile. Non piazzo l'ordine per sicurezza."
-            )
-            salva_ordine(SIMBOLO, segnale, quantita, prezzo_attuale, client_order_id, "saltato", "liquidita' insufficiente")
-            raise SystemExit(0)
-
-        richiesta_ordine = MarketOrderRequest(
-            symbol=SIMBOLO,
-            qty=quantita,
-            side=OrderSide.BUY,
-            time_in_force=TimeInForce.DAY,
-            client_order_id=client_order_id,
-        )
-
-    else:  # segnale == "SELL"
-        posizioni_attuali = esegui_con_retry(
-            lambda: client_trading.get_all_positions(),
-            descrizione="lettura posizioni prima della vendita",
-        )
-        posizione_esistente = next((p for p in posizioni_attuali if p.symbol == SIMBOLO), None)
-
-        if posizione_esistente is None:
-            print(f"\nSegnale SELL ma non ho nessuna posizione aperta su {SIMBOLO}: non c'e' nulla da vendere.")
-            salva_ordine(SIMBOLO, segnale, 0, prezzo_attuale, client_order_id, "saltato", "nessuna posizione da chiudere")
-            raise SystemExit(0)
-
-        quantita = int(float(posizione_esistente.qty))
-        print(f"Chiudo la posizione esistente: {quantita} azioni di {SIMBOLO}.")
-
-        richiesta_ordine = MarketOrderRequest(
-            symbol=SIMBOLO,
-            qty=quantita,
-            side=OrderSide.SELL,
-            time_in_force=TimeInForce.DAY,
-            client_order_id=client_order_id,
-        )
-
-    # ----- Passo 4: invio l'ordine (con retry automatico) -----
-    print("\n=== Passo 4: invio l'ordine ad Alpaca ===")
-
+    # Tutto il resto e' avvolto in un try/except: se succede QUALSIASI cosa
+    # di inaspettato (un errore che non avevamo previsto), vogliamo che il
+    # bot lo registri (battito cuore "errore" + notifica), invece di sparire
+    # nel nulla senza che tu te ne accorga. Questo diventa importante
+    # soprattutto quando il bot girera' da solo H24 (Fase 7), senza
+    # nessuno che guarda lo schermo in quel momento.
     try:
-        ordine_inviato = esegui_con_retry(
-            lambda: client_trading.submit_order(richiesta_ordine),
-            descrizione=f"invio ordine {segnale} {quantita} {SIMBOLO}",
+        # ----- Passo 1: leggo il conto e controllo il circuit breaker -----
+        print("=== Passo 1: leggo il conto e controllo il limite di perdita giornaliera ===")
+
+        account = esegui_con_retry(lambda: client_trading.get_account(), descrizione="lettura conto")
+        orologio = esegui_con_retry(lambda: client_trading.get_clock(), descrizione="lettura calendario di mercato")
+
+        liquidita = float(account.cash)
+        valore_portafoglio = float(account.portfolio_value)
+
+        # Salviamo uno snapshot adesso: se e' il primo di oggi, diventa anche il
+        # nostro "valore di inizio giornata" per il circuit breaker.
+        salva_snapshot_conto(liquidita, valore_portafoglio, orologio.is_open)
+        valore_inizio_giornata = primo_valore_portafoglio_di_oggi()
+
+        deve_fermarsi, perdita_oggi = controlla_limite_perdita_giornaliera(
+            valore_inizio_giornata, valore_portafoglio
         )
-        print(f"Ordine inviato! ID Alpaca: {ordine_inviato.id}, stato: {ordine_inviato.status}")
-        salva_ordine(SIMBOLO, segnale, quantita, prezzo_attuale, client_order_id, "inviato", str(ordine_inviato.status))
-    except Exception as errore:
-        print(f"\nNon sono riuscito a inviare l'ordine: {errore}")
-        salva_ordine(SIMBOLO, segnale, quantita, prezzo_attuale, client_order_id, "errore", str(errore))
+        print(
+            f"Portafoglio: inizio giornata {valore_inizio_giornata:,.2f} $, "
+            f"adesso {valore_portafoglio:,.2f} $ (perdita di oggi: {perdita_oggi * 100:.2f}%)"
+        )
 
-    # ----- Passo 5: storico ordini + riconciliazione -----
-    mostra_ordini()
+        if deve_fermarsi:
+            messaggio = (
+                f"CIRCUIT BREAKER ATTIVATO su {SIMBOLO}: perdita di oggi "
+                f"{perdita_oggi * 100:.2f}%. Il bot non piazza nuovi ordini oggi."
+            )
+            print(f"\n{messaggio}")
+            registra_battito_cuore("fermato_circuit_breaker", messaggio)
+            invia_notifica(messaggio)
+            raise SystemExit(0)
 
-    print("\n=== Passo 5: riconciliazione posizioni ===")
-    mostra_riconciliazione()
+        if not orologio.is_open:
+            print("\nIl mercato e' chiuso in questo momento: non ha senso piazzare ordini adesso. Mi fermo qui.")
+            registra_battito_cuore("ok", "Mercato chiuso, nessuna azione.")
+            raise SystemExit(0)
+
+        # ----- Passo 2: calcolo il segnale della strategia -----
+        print(f"\n=== Passo 2: calcolo il segnale per {SIMBOLO} ===")
+
+        prezzi = scarica_prezzi_di_chiusura()
+        media_breve, media_lunga = calcola_medie_mobili(prezzi)
+        segnale, contesto = decidi_segnale(media_breve, media_lunga)
+        prezzo_attuale = float(prezzi.iloc[-1])
+
+        salva_segnale(SIMBOLO, segnale, prezzo_attuale, contesto, PERIODO_BREVE, PERIODO_LUNGO)
+        print(f"Segnale: {segnale} (prezzo attuale: {prezzo_attuale:,.2f} $)")
+
+        if segnale == "NONE":
+            print("\nNessun incrocio oggi: non piazzo nessun ordine. Va bene cosi'.")
+            registra_battito_cuore("ok", f"Nessun incrocio su {SIMBOLO}, nessuna azione.")
+            raise SystemExit(0)
+
+        # ----- Passo 3: controllo idempotenza e preparo l'ordine -----
+        client_order_id = genera_client_order_id(SIMBOLO, segnale)
+
+        if client_order_id_gia_usato(client_order_id):
+            print(
+                f"\nUn ordine con questo identificativo ('{client_order_id}') e' gia' "
+                "stato registrato oggi: non lo rimando, per evitare un ordine doppio "
+                "(idempotenza)."
+            )
+            registra_battito_cuore("ok", f"Segnale {segnale} gia' gestito oggi (idempotenza), nessuna azione.")
+            raise SystemExit(0)
+
+        print(f"\n=== Passo 3: preparo l'ordine ({segnale}) ===")
+
+        if segnale == "BUY":
+            stop_loss = calcola_stop_loss(prezzo_attuale)
+            sizing = calcola_dimensione_posizione(valore_portafoglio, prezzo_attuale, stop_loss)
+            quantita = sizing["numero_azioni"]
+
+            print(
+                f"Stop loss teorico: {stop_loss:,.2f} $ | Azioni da comprare: {quantita} | "
+                f"Costo stimato: {sizing['costo_totale']:,.2f} $"
+            )
+
+            if quantita <= 0:
+                print("\nIl position sizing dice 0 azioni (capitale troppo piccolo per questo prezzo/rischio): non piazzo nulla.")
+                salva_ordine(SIMBOLO, segnale, 0, prezzo_attuale, client_order_id, "saltato", "position sizing = 0 azioni")
+                registra_battito_cuore("ok", "Segnale BUY ma position sizing = 0 azioni, nessuna azione.")
+                raise SystemExit(0)
+
+            if sizing["costo_totale"] > liquidita:
+                print(
+                    f"\nAttenzione: servirebbero {sizing['costo_totale']:,.2f} $ ma hai solo "
+                    f"{liquidita:,.2f} $ di liquidita' disponibile. Non piazzo l'ordine per sicurezza."
+                )
+                salva_ordine(SIMBOLO, segnale, quantita, prezzo_attuale, client_order_id, "saltato", "liquidita' insufficiente")
+                registra_battito_cuore("ok", "Segnale BUY ma liquidita' insufficiente, nessuna azione.")
+                raise SystemExit(0)
+
+            richiesta_ordine = MarketOrderRequest(
+                symbol=SIMBOLO,
+                qty=quantita,
+                side=OrderSide.BUY,
+                time_in_force=TimeInForce.DAY,
+                client_order_id=client_order_id,
+            )
+
+        else:  # segnale == "SELL"
+            posizioni_attuali = esegui_con_retry(
+                lambda: client_trading.get_all_positions(),
+                descrizione="lettura posizioni prima della vendita",
+            )
+            posizione_esistente = next((p for p in posizioni_attuali if p.symbol == SIMBOLO), None)
+
+            if posizione_esistente is None:
+                print(f"\nSegnale SELL ma non ho nessuna posizione aperta su {SIMBOLO}: non c'e' nulla da vendere.")
+                salva_ordine(SIMBOLO, segnale, 0, prezzo_attuale, client_order_id, "saltato", "nessuna posizione da chiudere")
+                registra_battito_cuore("ok", "Segnale SELL ma nessuna posizione da chiudere, nessuna azione.")
+                raise SystemExit(0)
+
+            quantita = int(float(posizione_esistente.qty))
+            print(f"Chiudo la posizione esistente: {quantita} azioni di {SIMBOLO}.")
+
+            richiesta_ordine = MarketOrderRequest(
+                symbol=SIMBOLO,
+                qty=quantita,
+                side=OrderSide.SELL,
+                time_in_force=TimeInForce.DAY,
+                client_order_id=client_order_id,
+            )
+
+        # ----- Passo 4: invio l'ordine (con retry automatico) -----
+        print("\n=== Passo 4: invio l'ordine ad Alpaca ===")
+
+        try:
+            ordine_inviato = esegui_con_retry(
+                lambda: client_trading.submit_order(richiesta_ordine),
+                descrizione=f"invio ordine {segnale} {quantita} {SIMBOLO}",
+            )
+            print(f"Ordine inviato! ID Alpaca: {ordine_inviato.id}, stato: {ordine_inviato.status}")
+            salva_ordine(SIMBOLO, segnale, quantita, prezzo_attuale, client_order_id, "inviato", str(ordine_inviato.status))
+            registra_battito_cuore("ok", f"Ordine {segnale} x{quantita} {SIMBOLO} inviato.")
+            invia_notifica(
+                f"Ordine {segnale} su {SIMBOLO}: {quantita} azioni @ ~{prezzo_attuale:,.2f}$ "
+                f"inviato (stato Alpaca: {ordine_inviato.status})."
+            )
+        except Exception as errore:
+            print(f"\nNon sono riuscito a inviare l'ordine: {errore}")
+            salva_ordine(SIMBOLO, segnale, quantita, prezzo_attuale, client_order_id, "errore", str(errore))
+            registra_battito_cuore("errore", f"Invio ordine {segnale} {SIMBOLO} fallito: {errore}")
+            invia_notifica(f"ERRORE: invio ordine {segnale} su {SIMBOLO} fallito: {errore}")
+
+        # ----- Passo 5: storico ordini + riconciliazione -----
+        mostra_ordini()
+
+        print("\n=== Passo 5: riconciliazione posizioni ===")
+        mostra_riconciliazione()
+
+    except SystemExit:
+        # Le uscite "volute" (raise SystemExit(0) qui sopra) non sono errori:
+        # le lasciamo passare senza toccarle.
+        raise
+    except Exception as errore_imprevisto:
+        messaggio = f"Errore imprevisto nel bot: {errore_imprevisto}"
+        print(f"\n{messaggio}")
+        registra_battito_cuore("errore", messaggio)
+        invia_notifica(f"ERRORE IMPREVISTO nel bot: {errore_imprevisto}")
+        raise
