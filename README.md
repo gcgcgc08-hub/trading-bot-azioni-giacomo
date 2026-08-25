@@ -33,6 +33,7 @@ Aggiunte proposte e accettate:
 - **Slippage e commissioni nel backtest**, per risultati realistici e non ottimistici
 - **Filtro di liquidità minima**: evitare titoli scambiati troppo poco
 - **Attenzione ai fusi orari**: il mercato USA segue l'orario di New York, Giacomo è in Italia
+- **Limite di concentrazione massima per titolo** (es. 20-25% del capitale): perché uno stop loss stretto permette matematicamente posizioni molto grandi (visto nel test della Fase 2), quindi serve un secondo tetto indipendente dal calcolo del position sizing
 
 ## Ordine di costruzione concordato
 
@@ -43,7 +44,7 @@ Aggiunte proposte e accettate:
 5. Affidabilità: gestione errori di rete/retry, idempotenza ordini, riconciliazione periodica delle posizioni
 6. Watchdog/heartbeat, kill switch manuale, notifiche (es. Telegram)
 7. Deploy su Oracle Cloud + versionamento su GitHub
-8. Raffinamenti: multi-timeframe, take profit frazionato, matrice di correlazione, feed RSS, filtro di liquidità, slippage/commissioni nel backtest
+8. Raffinamenti: multi-timeframe, take profit frazionato, matrice di correlazione, limite di concentrazione massima per titolo, feed RSS, filtro di liquidità, slippage/commissioni nel backtest
 9. Solo se e quando deciso: leva finanziaria e passaggio a conto reale (100-200€ per iniziare)
 
 Ogni fase viene spiegata passo passo mentre la costruiamo: non serve sapere già programmare, il codice sarà commentato riga per riga.
