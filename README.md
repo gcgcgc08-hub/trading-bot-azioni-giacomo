@@ -18,7 +18,7 @@ Idee originali di Giacomo:
 - Matrice di correlazione tra titoli
 - Take profit frazionato
 - Modulo watchdog/heartbeat, perché il bot deve girare da solo H24
-- Non deve girare sul PC di Giacomo → hosting su **Oracle Cloud (Always Free tier)**
+- Non deve girare sul PC di Giacomo → **inizialmente pensato per Oracle Cloud (Always Free tier), poi passato a GitHub Actions** perché Giacomo non ha una carta di credito/debito da usare per la verifica di Oracle (vedi Fase 7)
 - Codice versionato su **GitHub**
 - Memoria/storage su **SQLite**
 
@@ -43,7 +43,7 @@ Aggiunte proposte e accettate:
 4. Prima strategia semplice su un solo timeframe, con logging contestuale (attenzione ai fusi orari)
 5. Affidabilità: gestione errori di rete/retry, idempotenza ordini, riconciliazione periodica delle posizioni
 6. Watchdog/heartbeat, kill switch manuale, notifiche (es. Telegram)
-7. Deploy su Oracle Cloud + versionamento su GitHub
+7. Deploy per farlo girare da solo H24 — inizialmente pensato per Oracle Cloud, **passato a GitHub Actions** (schedule automatico, gratuito, senza carta di credito)
 8. Raffinamenti: multi-timeframe, take profit frazionato, matrice di correlazione, limite di concentrazione massima per titolo, feed RSS, filtro di liquidità, slippage/commissioni nel backtest
 9. Solo se e quando deciso: leva finanziaria e passaggio a conto reale (100-200€ per iniziare)
 
@@ -56,7 +56,8 @@ Ogni fase viene spiegata passo passo mentre la costruiamo: non serve sapere già
 - [x] Fase 3 — Prima strategia (incrocio di medie mobili) con logging contestuale (`fase3_strategia_sma.py`) — testata, funzionante, pushata su GitHub
 - [x] Fase 4 — Dal segnale all'ordine vero (paper trading): position sizing + circuit breaker + idempotenza degli ordini (client_order_id univoco) + retry sugli errori di rete + riconciliazione delle posizioni (`fase4_esecuzione_ordini.py`) — testata (parzialmente: non c'è ancora stato un vero BUY/SELL da verificare), pushata su GitHub
 - [ ] Fase 6 — Kill switch manuale (`kill_switch.py`, file STOP.txt), battito cardiaco/watchdog (`database.py`, tabella `battiti_cuore`), notifiche Telegram (`notifiche.py`), tutto collegato dentro `fase4_esecuzione_ordini.py` — appena scritta, da testare (in particolare le notifiche Telegram richiedono di configurare TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID nel `.env`)
-- [ ] Fase 7 (Oracle Cloud), Fase 8 (raffinamenti), Fase 9 (leva/reale) — non ancora iniziate
+- [ ] Fase 7 — Deploy H24 con **GitHub Actions** (`.github/workflows/trading-bot.yml`): schedule automatico ogni 15 minuti nell'orario di mercato USA (in UTC, con margine per l'ora legale), esecuzione manuale disponibile (`workflow_dispatch`), `bot.db` salvato nel repository ad ogni esecuzione perché i runner di GitHub sono temporanei — appena scritto, da configurare (secrets su GitHub) e testare
+- [ ] Fase 8 (raffinamenti), Fase 9 (leva/reale) — non ancora iniziate
 
 ## Come far girare il codice
 

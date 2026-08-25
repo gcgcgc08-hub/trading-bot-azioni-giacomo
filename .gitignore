@@ -8,3 +8,9 @@ venv/
 .DS_Store
 _to_delete/
 STOP.txt
+
+# FASE 7: eccezione voluta. bot.db va TRACCIATO da git, perche' il
+# workflow di GitHub Actions lo salva nel repository per farlo
+# sopravvivere da un'esecuzione all'altra (i "runner" di GitHub sono
+# temporanei e vuoti ogni volta). Gli altri file *.db restano esclusi.
+!bot.db
