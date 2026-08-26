@@ -136,6 +136,19 @@ def inizializza_database():
         )
     """)
 
+    # FASE 8: tabella per la matrice di correlazione tra titoli. Ogni riga
+    # e' una COPPIA di titoli con il loro coefficiente di correlazione in
+    # quel momento (vedi fase8_matrice_correlazione.py per i dettagli).
+    cursore.execute("""
+        CREATE TABLE IF NOT EXISTS correlazioni (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            data_ora TEXT NOT NULL,
+            simbolo_a TEXT NOT NULL,
+            simbolo_b TEXT NOT NULL,
+            coefficiente REAL NOT NULL
+        )
+    """)
+
     # FASE 8: tabella per le notizie scaricate dal feed RSS gratuito.
     # 'link' e' UNIQUE apposta: e' quello che usiamo per capire se una
     # notizia l'abbiamo gia' salvata in passato, cosi' non la duplichiamo
@@ -489,6 +502,36 @@ def mostra_notizie(simbolo=None, limite=10):
         fonte_testo = fonte if fonte else "fonte sconosciuta"
         print(f"  [{data_testo}] ({fonte_testo}) {titolo}")
         print(f"    {link}")
+
+
+def salva_correlazione(simbolo_a, simbolo_b, coefficiente):
+    """Salva il coefficiente di correlazione calcolato tra due titoli."""
+    connessione = ottieni_connessione()
+    cursore = connessione.cursor()
+    cursore.execute(
+        "INSERT INTO correlazioni (data_ora, simbolo_a, simbolo_b, coefficiente) VALUES (?, ?, ?, ?)",
+        (datetime.now().isoformat(timespec="seconds"), simbolo_a, simbolo_b, coefficiente),
+    )
+    connessione.commit()
+    connessione.close()
+
+
+def mostra_correlazioni(limite=20):
+    """Stampa le ultime correlazioni salvate (le piu' recenti per prime)."""
+    connessione = ottieni_connessione()
+    cursore = connessione.cursor()
+    cursore.execute(
+        "SELECT data_ora, simbolo_a, simbolo_b, coefficiente FROM correlazioni ORDER BY id DESC LIMIT ?",
+        (limite,),
+    )
+    righe = cursore.fetchall()
+    connessione.close()
+
+    print("\nUltime correlazioni salvate (dentro bot.db):")
+    if not righe:
+        print("  (nessuna correlazione salvata finora)")
+    for data_ora, simbolo_a, simbolo_b, coefficiente in righe:
+        print(f"  {data_ora} - {simbolo_a} / {simbolo_b}: {coefficiente:+.2f}")
 
 
 def apri_posizione(simbolo, quantita_originale, prezzo_entrata):
