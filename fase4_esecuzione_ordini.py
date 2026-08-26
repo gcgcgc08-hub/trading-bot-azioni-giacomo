@@ -83,6 +83,7 @@ from fase3_strategia_sma import (
     PERIODO_BREVE,
     PERIODO_LUNGO,
     scarica_prezzi_di_chiusura,
+    scarica_volume_medio,
     calcola_medie_mobili,
     decidi_segnale,
     api_key,
@@ -94,6 +95,8 @@ from risk_management import (
     controlla_limite_perdita_giornaliera,
     applica_limite_concentrazione,
     CONCENTRAZIONE_MASSIMA_PERCENTUALE,
+    verifica_liquidita_sufficiente,
+    VOLUME_MEDIO_MINIMO_AZIONI,
 )
 from database import (
     inizializza_database,
@@ -278,6 +281,30 @@ if __name__ == "__main__":
         print(f"\n=== Passo 3: preparo l'ordine ({segnale}) ===")
 
         if segnale == "BUY":
+            # FASE 8: prima di qualsiasi calcolo di quantita', controlliamo
+            # che il titolo si scambi abbastanza da poterlo comprare in
+            # sicurezza (filtro di liquidita' minima). Non ha senso
+            # applicarlo anche al ramo SELL: se abbiamo gia' una posizione
+            # aperta vogliamo sempre poterla chiudere, anche se la
+            # liquidita' del titolo fosse calata nel frattempo.
+            volume_medio = esegui_con_retry(
+                lambda: scarica_volume_medio(SIMBOLO),
+                descrizione="lettura volume medio per il filtro di liquidita'",
+            )
+
+            if not verifica_liquidita_sufficiente(volume_medio):
+                print(
+                    f"\nSegnale BUY ma {SIMBOLO} ha un volume medio di {volume_medio:,.0f} "
+                    f"azioni/giorno, sotto la soglia minima di {VOLUME_MEDIO_MINIMO_AZIONI:,} "
+                    "azioni/giorno: non lo compro (filtro di liquidita' minima)."
+                )
+                salva_ordine(
+                    SIMBOLO, segnale, 0, prezzo_attuale, client_order_id, "saltato",
+                    f"liquidita' insufficiente (volume medio {volume_medio:,.0f}/giorno)",
+                )
+                registra_battito_cuore("ok", f"Segnale BUY ma liquidita' insufficiente su {SIMBOLO}, nessuna azione.")
+                raise SystemExit(0)
+
             stop_loss = calcola_stop_loss(prezzo_attuale)
             sizing = calcola_dimensione_posizione(valore_portafoglio, prezzo_attuale, stop_loss)
             quantita_da_stop_loss = sizing["numero_azioni"]

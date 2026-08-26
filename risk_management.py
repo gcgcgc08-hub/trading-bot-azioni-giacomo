@@ -13,11 +13,13 @@ di pensare a quale azione comprare o quando comprarla:
   3. Ho perso troppo oggi? Il bot si deve fermare?
      -> controlla_limite_perdita_giornaliera()
 
-FASE 8 aggiunge una quarta domanda:
+FASE 8 aggiunge una quarta e una quinta domanda:
 
   4. Anche se il rischio "matematico" lo permetterebbe, sto per mettere
      troppo capitale su un solo titolo?
      -> applica_limite_concentrazione()
+  5. Questo titolo si scambia abbastanza da poterlo comprare in sicurezza?
+     -> verifica_liquidita_sufficiente()
 
 Questo modulo non compra o vende nulla da solo: prepara i "numeri giusti"
 che la strategia vera (Fase 3) usera' per decidere cosa fare.
@@ -181,3 +183,33 @@ def applica_limite_concentrazione(
         "numero_azioni_massimo_concentrazione": numero_azioni_massimo,
         "ridotto_per_concentrazione": numero_azioni_finale < numero_azioni_richiesto,
     }
+
+
+# ---------------------------------------------------------------------------
+# 6) FILTRO DI LIQUIDITA' MINIMA (FASE 8)
+# ---------------------------------------------------------------------------
+
+# Se un titolo scambia in media MENO di questo numero di azioni al giorno,
+# lo consideriamo troppo "illiquido" per comprarlo.
+VOLUME_MEDIO_MINIMO_AZIONI = 500_000
+
+
+def verifica_liquidita_sufficiente(volume_medio_giornaliero, volume_minimo=VOLUME_MEDIO_MINIMO_AZIONI):
+    """
+    Controlla se un titolo si scambia abbastanza da poterlo comprare in
+    sicurezza (filtro di liquidita' minima).
+
+    Perche' ci interessa? Su un titolo scambiato pochissimo (poche migliaia
+    di azioni al giorno), anche un ordine piccolo puo' spostare il prezzo in
+    modo innaturale (poca gente compra/vende = basta poco per muoverlo), e
+    potremmo trovare difficolta' a rivenderlo in fretta al prezzo giusto
+    quando vogliamo chiudere la posizione. Un titolo molto scambiato (come
+    AAPL, il nostro simbolo di prova) non ha questo problema: e' per questo
+    che finora non ce ne eravamo accorti, ma il filtro serve appena
+    proveremo altri titoli meno scambiati.
+
+    'volume_medio_giornaliero' e' il numero medio di azioni scambiate al
+    giorno, calcolato sugli ultimi giorni di borsa (vedi
+    scarica_volume_medio() in fase3_strategia_sma.py).
+    """
+    return volume_medio_giornaliero >= volume_minimo

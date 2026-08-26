@@ -60,7 +60,7 @@ Ogni fase viene spiegata passo passo mentre la costruiamo: non serve sapere già
 - [ ] Fase 8 (raffinamenti) — IN CORSO, un pezzo alla volta:
   - [x] Feed RSS per le news (`fase8_feed_rss.py`, tabella `notizie` in `database.py`) — testato con successo, scarica e salva le notizie reali su AAPL da Google News RSS, senza duplicati; per ora solo di contesto/lettura, non influenza ancora le decisioni del bot
   - [x] Limite di concentrazione massima per titolo (`risk_management.py`: `applica_limite_concentrazione()`, tetto di default 25%; collegato dentro `fase4_esecuzione_ordini.py` prima di ogni ordine BUY) — testato: conferma che perfino con lo stop loss di default il position sizing basato solo sul rischio suggerirebbe il 66% del portafoglio su un solo titolo, esattamente quanto notato nel test della Fase 2; il nuovo tetto lo riduce correttamente
-  - [ ] Filtro di liquidità minima
+  - [x] Filtro di liquidità minima (`fase3_strategia_sma.py`: `scarica_volume_medio()`; `risk_management.py`: `verifica_liquidita_sufficiente()`, soglia di default 500.000 azioni/giorno; collegato in `fase4_esecuzione_ordini.py` prima di ogni ordine BUY, non su SELL così si può sempre chiudere una posizione già aperta) — testato: con AAPL (decine di milioni di azioni/giorno) il filtro passa sempre, servirà davvero quando proveremo titoli meno scambiati
   - [ ] Take profit frazionato
   - [ ] Analisi multi-timeframe
   - [ ] Matrice di correlazione tra titoli

@@ -195,6 +195,33 @@ def scarica_prezzi_di_chiusura(simbolo=SIMBOLO, giorni=GIORNI_STORIA_DA_RICHIEDE
     return prezzi
 
 
+def scarica_volume_medio(simbolo=SIMBOLO, giorni=GIORNI_STORIA_DA_RICHIEDERE, periodo_media=20):
+    """
+    FASE 8: scarica lo storico e restituisce il volume medio giornaliero
+    (numero di azioni scambiate, non dollari) degli ultimi 'periodo_media'
+    giorni di borsa. Serve al filtro di liquidita' minima in
+    risk_management.py: un titolo scambiato troppo poco e' piu' rischioso da
+    comprare e poi rivendere in fretta.
+
+    E' una chiamata di rete separata da scarica_prezzi_di_chiusura() (un
+    'volume' in piu' rispetto a 'close' nella stessa tabella che Alpaca ci
+    restituisce): la teniamo divisa per semplicita' e per non rischiare di
+    rompere la funzione dei prezzi, gia' testata e funzionante.
+    """
+    adesso_utc = datetime.now(timezone.utc)
+    inizio = adesso_utc - timedelta(days=giorni)
+
+    richiesta = StockBarsRequest(
+        symbol_or_symbols=simbolo,
+        timeframe=TimeFrame.Day,
+        start=inizio,
+        feed=DataFeed.IEX,
+    )
+    barre = client_dati.get_stock_bars(richiesta)
+    volumi = barre.df.xs(simbolo).sort_index()["volume"]
+    return float(volumi.tail(periodo_media).mean())
+
+
 # ---------------------------------------------------------------------------
 # PROGRAMMA PRINCIPALE
 # ---------------------------------------------------------------------------
