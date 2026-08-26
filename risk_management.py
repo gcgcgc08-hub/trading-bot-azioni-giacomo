@@ -13,6 +13,12 @@ di pensare a quale azione comprare o quando comprarla:
   3. Ho perso troppo oggi? Il bot si deve fermare?
      -> controlla_limite_perdita_giornaliera()
 
+FASE 8 aggiunge una quarta domanda:
+
+  4. Anche se il rischio "matematico" lo permetterebbe, sto per mettere
+     troppo capitale su un solo titolo?
+     -> applica_limite_concentrazione()
+
 Questo modulo non compra o vende nulla da solo: prepara i "numeri giusti"
 che la strategia vera (Fase 3) usera' per decidere cosa fare.
 """
@@ -114,3 +120,64 @@ def controlla_limite_perdita_giornaliera(
     deve_fermarsi = perdita_percentuale_oggi >= limite_percentuale
 
     return deve_fermarsi, perdita_percentuale_oggi
+
+
+# ---------------------------------------------------------------------------
+# 4) LIMITE DI CONCENTRAZIONE MASSIMA PER TITOLO (FASE 8)
+# ---------------------------------------------------------------------------
+
+# Non piu' del 25% del valore del portafoglio investito in un singolo
+# titolo, qualsiasi cosa dica il position sizing basato sullo stop loss.
+CONCENTRAZIONE_MASSIMA_PERCENTUALE = 0.25
+
+
+def calcola_limite_concentrazione(
+    prezzo_entrata,
+    valore_portafoglio,
+    percentuale_massima=CONCENTRAZIONE_MASSIMA_PERCENTUALE,
+):
+    """
+    Calcola quante azioni al massimo possiamo comprare di UN SINGOLO titolo
+    senza superare una certa percentuale del portafoglio totale (es. 25%).
+    """
+    valore_massimo_investibile = valore_portafoglio * percentuale_massima
+    return int(valore_massimo_investibile / prezzo_entrata)
+
+
+def applica_limite_concentrazione(
+    numero_azioni_richiesto,
+    prezzo_entrata,
+    valore_portafoglio,
+    percentuale_massima=CONCENTRAZIONE_MASSIMA_PERCENTUALE,
+):
+    """
+    Prende il numero di azioni che calcola_dimensione_posizione() vorrebbe
+    comprare (basato SOLO sul rischio: quanto perdiamo se scatta lo stop
+    loss) e lo riduce se serve per rispettare il tetto di concentrazione
+    massima per titolo.
+
+    Perche' serve un secondo tetto, oltre al position sizing? Perche' quel
+    calcolo guarda solo al rischio per-azione: se lo stop loss e' molto
+    stretto, la matematica del rischio puo' suggerire di comprare
+    tantissime azioni - anche una fetta enorme del portafoglio - perche'
+    "in teoria" la perdita per azione e' piccola. L'abbiamo visto proprio
+    con i numeri nel test della Fase 2. Questo e' un tetto indipendente:
+    anche se il rischio calcolato fosse piccolo, non vogliamo MAI avere
+    piu' di una certa percentuale del capitale concentrata su un solo
+    titolo (un imprevisto specifico di quel titolo, tipo una brutta notizia
+    improvvisa, farebbe troppo male tutto insieme).
+
+    Restituisce un dizionario con il numero di azioni FINALE (il piu'
+    piccolo tra i due limiti) e se e' stato ridotto rispetto a quanto
+    richiesto, cosi' possiamo stamparlo e capire perche'.
+    """
+    numero_azioni_massimo = calcola_limite_concentrazione(
+        prezzo_entrata, valore_portafoglio, percentuale_massima
+    )
+    numero_azioni_finale = min(numero_azioni_richiesto, numero_azioni_massimo)
+
+    return {
+        "numero_azioni": numero_azioni_finale,
+        "numero_azioni_massimo_concentrazione": numero_azioni_massimo,
+        "ridotto_per_concentrazione": numero_azioni_finale < numero_azioni_richiesto,
+    }

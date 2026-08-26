@@ -92,6 +92,8 @@ from risk_management import (
     calcola_stop_loss,
     calcola_dimensione_posizione,
     controlla_limite_perdita_giornaliera,
+    applica_limite_concentrazione,
+    CONCENTRAZIONE_MASSIMA_PERCENTUALE,
 )
 from database import (
     inizializza_database,
@@ -278,22 +280,38 @@ if __name__ == "__main__":
         if segnale == "BUY":
             stop_loss = calcola_stop_loss(prezzo_attuale)
             sizing = calcola_dimensione_posizione(valore_portafoglio, prezzo_attuale, stop_loss)
-            quantita = sizing["numero_azioni"]
+            quantita_da_stop_loss = sizing["numero_azioni"]
+
+            # FASE 8: secondo tetto, indipendente dal position sizing basato
+            # sul rischio - non piu' del 25% (di default) del portafoglio su
+            # un solo titolo, anche se il calcolo del rischio permetterebbe
+            # di comprarne di piu'.
+            limite_concentrazione = applica_limite_concentrazione(
+                quantita_da_stop_loss, prezzo_attuale, valore_portafoglio
+            )
+            quantita = limite_concentrazione["numero_azioni"]
+            costo_totale = quantita * prezzo_attuale
 
             print(
-                f"Stop loss teorico: {stop_loss:,.2f} $ | Azioni da comprare: {quantita} | "
-                f"Costo stimato: {sizing['costo_totale']:,.2f} $"
+                f"Stop loss teorico: {stop_loss:,.2f} $ | Azioni suggerite dal rischio: "
+                f"{quantita_da_stop_loss} | Azioni finali: {quantita} | Costo stimato: {costo_totale:,.2f} $"
             )
+            if limite_concentrazione["ridotto_per_concentrazione"]:
+                print(
+                    f"(Ridotte da {quantita_da_stop_loss} a {quantita}: il position sizing basato "
+                    f"sullo stop loss avrebbe superato il tetto del "
+                    f"{CONCENTRAZIONE_MASSIMA_PERCENTUALE * 100:.0f}% del portafoglio su un solo titolo.)"
+                )
 
             if quantita <= 0:
-                print("\nIl position sizing dice 0 azioni (capitale troppo piccolo per questo prezzo/rischio): non piazzo nulla.")
-                salva_ordine(SIMBOLO, segnale, 0, prezzo_attuale, client_order_id, "saltato", "position sizing = 0 azioni")
-                registra_battito_cuore("ok", "Segnale BUY ma position sizing = 0 azioni, nessuna azione.")
+                print("\nIl calcolo dice 0 azioni (capitale troppo piccolo per questo prezzo, o tetto di concentrazione troppo basso): non piazzo nulla.")
+                salva_ordine(SIMBOLO, segnale, 0, prezzo_attuale, client_order_id, "saltato", "position sizing/concentrazione = 0 azioni")
+                registra_battito_cuore("ok", "Segnale BUY ma quantita' finale 0 azioni, nessuna azione.")
                 raise SystemExit(0)
 
-            if sizing["costo_totale"] > liquidita:
+            if costo_totale > liquidita:
                 print(
-                    f"\nAttenzione: servirebbero {sizing['costo_totale']:,.2f} $ ma hai solo "
+                    f"\nAttenzione: servirebbero {costo_totale:,.2f} $ ma hai solo "
                     f"{liquidita:,.2f} $ di liquidita' disponibile. Non piazzo l'ordine per sicurezza."
                 )
                 salva_ordine(SIMBOLO, segnale, quantita, prezzo_attuale, client_order_id, "saltato", "liquidita' insufficiente")

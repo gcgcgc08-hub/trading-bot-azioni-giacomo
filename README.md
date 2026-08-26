@@ -59,7 +59,7 @@ Ogni fase viene spiegata passo passo mentre la costruiamo: non serve sapere già
 - [x] Fase 7 — Deploy H24 con **GitHub Actions** (`.github/workflows/trading-bot.yml`): schedule automatico ogni 15 minuti nell'orario di mercato USA (in UTC, con margine per l'ora legale), esecuzione manuale disponibile (`workflow_dispatch`), `bot.db` salvato nel repository ad ogni esecuzione perché i runner di GitHub sono temporanei — secrets configurati, test manuale eseguito con successo (bot ha correttamente riconosciuto il mercato chiuso e non ha fatto nulla), schedule automatica attiva; in monitoraggio nei prossimi giorni
 - [ ] Fase 8 (raffinamenti) — IN CORSO, un pezzo alla volta:
   - [x] Feed RSS per le news (`fase8_feed_rss.py`, tabella `notizie` in `database.py`) — testato con successo, scarica e salva le notizie reali su AAPL da Google News RSS, senza duplicati; per ora solo di contesto/lettura, non influenza ancora le decisioni del bot
-  - [ ] Limite di concentrazione massima per titolo
+  - [x] Limite di concentrazione massima per titolo (`risk_management.py`: `applica_limite_concentrazione()`, tetto di default 25%; collegato dentro `fase4_esecuzione_ordini.py` prima di ogni ordine BUY) — testato: conferma che perfino con lo stop loss di default il position sizing basato solo sul rischio suggerirebbe il 66% del portafoglio su un solo titolo, esattamente quanto notato nel test della Fase 2; il nuovo tetto lo riduce correttamente
   - [ ] Filtro di liquidità minima
   - [ ] Take profit frazionato
   - [ ] Analisi multi-timeframe
