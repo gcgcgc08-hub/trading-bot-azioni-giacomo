@@ -136,6 +136,20 @@ def inizializza_database():
         )
     """)
 
+    # FASE 8: tabella per i risultati del backtest (con e senza slippage e
+    # commissioni), cosi' possiamo tenere lo storico dei confronti fatti.
+    cursore.execute("""
+        CREATE TABLE IF NOT EXISTS backtest_risultati (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            data_ora TEXT NOT NULL,
+            simbolo TEXT NOT NULL,
+            giorni_analizzati INTEGER NOT NULL,
+            capitale_finale_ottimistico REAL NOT NULL,
+            capitale_finale_realistico REAL NOT NULL,
+            numero_operazioni INTEGER NOT NULL
+        )
+    """)
+
     # FASE 8: tabella per la matrice di correlazione tra titoli. Ogni riga
     # e' una COPPIA di titoli con il loro coefficiente di correlazione in
     # quel momento (vedi fase8_matrice_correlazione.py per i dettagli).
@@ -502,6 +516,60 @@ def mostra_notizie(simbolo=None, limite=10):
         fonte_testo = fonte if fonte else "fonte sconosciuta"
         print(f"  [{data_testo}] ({fonte_testo}) {titolo}")
         print(f"    {link}")
+
+
+def salva_risultato_backtest(
+    simbolo, giorni_analizzati, capitale_finale_ottimistico, capitale_finale_realistico, numero_operazioni
+):
+    """Salva il risultato di un backtest (versione ottimistica vs realistica)."""
+    connessione = ottieni_connessione()
+    cursore = connessione.cursor()
+    cursore.execute(
+        """
+        INSERT INTO backtest_risultati (
+            data_ora, simbolo, giorni_analizzati,
+            capitale_finale_ottimistico, capitale_finale_realistico, numero_operazioni
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            datetime.now().isoformat(timespec="seconds"),
+            simbolo,
+            giorni_analizzati,
+            capitale_finale_ottimistico,
+            capitale_finale_realistico,
+            numero_operazioni,
+        ),
+    )
+    connessione.commit()
+    connessione.close()
+
+
+def mostra_backtest(limite=10):
+    """Stampa gli ultimi risultati di backtest salvati (i piu' recenti per primi)."""
+    connessione = ottieni_connessione()
+    cursore = connessione.cursor()
+    cursore.execute(
+        """
+        SELECT data_ora, simbolo, giorni_analizzati, capitale_finale_ottimistico,
+               capitale_finale_realistico, numero_operazioni
+        FROM backtest_risultati ORDER BY id DESC LIMIT ?
+        """,
+        (limite,),
+    )
+    righe = cursore.fetchall()
+    connessione.close()
+
+    print("\nUltimi risultati di backtest salvati (dentro bot.db):")
+    if not righe:
+        print("  (nessun backtest salvato finora)")
+    for data_ora, simbolo, giorni, ottimistico, realistico, operazioni in righe:
+        differenza = ottimistico - realistico
+        print(
+            f"  {data_ora} - {simbolo} ({giorni} giorni, {operazioni} operazioni): "
+            f"ottimistico {ottimistico:,.2f} $ | realistico {realistico:,.2f} $ "
+            f"(differenza: {differenza:,.2f} $)"
+        )
 
 
 def salva_correlazione(simbolo_a, simbolo_b, coefficiente):
