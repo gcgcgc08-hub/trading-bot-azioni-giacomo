@@ -1,13 +1,57 @@
+# FASE 7 - Far girare il bot da solo, senza il Mac di Giacomo acceso
+# =====================================================================
+#
+# Questo file dice a GitHub: "ogni tanto, da solo, prendi il nostro codice,
+# installalo su un computer temporaneo tuo, e lancia il bot". Si chiama
+# "GitHub Actions" ed e' completamente gratuito per un progetto come
+# questo, senza bisogno di nessuna carta di credito (a differenza di
+# Oracle Cloud, AWS, Google Cloud...).
+#
+# Una cosa importante da capire: ogni volta che questo file gira, GitHub
+# usa un computer NUOVO e VUOTO (si chiama "runner"), che alla fine viene
+# buttato via. Questo vuol dire che il nostro database bot.db, di norma,
+# NON si ricorderebbe nulla da un'esecuzione all'altra (perderemmo lo
+# storico dei segnali, degli ordini, e soprattutto il valore di inizio
+# giornata usato dal circuit breaker!). Per risolvere, l'ultimo passo di
+# questo file salva bot.db DENTRO al repository GitHub stesso (con un
+# commit automatico), cosi' la prossima esecuzione lo ritrova li'.
+#
+# Le chiavi segrete (Alpaca, Telegram) NON sono scritte qui: sono lette
+# dai "Secrets" del repository (Settings > Secrets and variables >
+# Actions su GitHub), esattamente come il file .env sul Mac, ma gestiti
+# in modo sicuro da GitHub invece che da un file sul disco.
+
 name: Trading Bot - Esecuzione periodica
 
 on:
+  # Schedule: ogni 15 minuti, dalle 13 alle 21 UTC, dal lunedi' al venerdi'.
+  # E' una finestra volutamente un po' piu' larga del vero orario di
+  # apertura di Wall Street (che cambia leggermente tra inverno ed estate
+  # per via dell'ora legale americana): non e' un problema, perche' il
+  # bot stesso controlla se il mercato e' davvero aperto e non fa nulla
+  # se e' chiuso (festivita' comprese).
+  #
+  # Perche' ":07, :22, :37, :52" e non ":00, :15, :30, :45"? GitHub stesso
+  # avvisa che gli schedule possono subire ritardi (o venire saltati) nei
+  # momenti di picco, e i picchi piu' forti sono proprio all'inizio di ogni
+  # quarto d'ora, perche' tantissimi altri progetti schedulano li'. Restare
+  # spostati di 7 minuti riduce il rischio di essere rimandati o persi.
   schedule:
-    - cron: '*/15 13-21 * * 1-5'
+    - cron: '7,22,37,52 13-21 * * 1-5'
+
+  # Permette anche di far partire il bot manualmente da GitHub (tasto
+  # "Run workflow" nella scheda Actions), utile per testare senza dover
+  # aspettare l'orario giusto.
   workflow_dispatch:
 
+# Serve il permesso di scrittura per poter salvare bot.db nel repository
+# alla fine di ogni esecuzione.
 permissions:
   contents: write
 
+# Evita che due esecuzioni girino contemporaneamente (es. una schedulata
+# e una manuale insieme): eviterebbero di pestarsi i piedi a vicenda nel
+# salvare bot.db.
 concurrency:
   group: trading-bot-run
   cancel-in-progress: false
@@ -38,6 +82,9 @@ jobs:
 
       - name: Salva lo stato del database nel repository
         if: always()
+        # "if: always()" fa girare questo passo anche se quello sopra e'
+        # fallito con un errore: vogliamo salvare comunque il battito
+        # cardiaco "errore" che il bot ha registrato, invece di perderlo.
         run: |
           git config user.name "trading-bot"
           git config user.email "trading-bot@users.noreply.github.com"
