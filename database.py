@@ -102,6 +102,40 @@ def inizializza_database():
         )
     """)
 
+    # FASE 8: tabelle per il take profit frazionato. Servono due tabelle
+    # collegate tra loro:
+    #   - 'posizioni_aperte': ogni volta che compriamo un titolo, registriamo
+    #     QUI la quantita' originale e il prezzo di carico. Ci serve perche'
+    #     Alpaca ci dice solo "quante azioni abbiamo ADESSO", ma il take
+    #     profit frazionato deve ragionare sulla quantita' ORIGINALE (per
+    #     decidere "vendi un terzo della posizione", non "vendi un terzo di
+    #     quello che rimane", che sarebbe una frazione diversa ogni volta).
+    #   - 'take_profit_eseguiti': ogni volta che vendiamo un "pezzo" per un
+    #     livello di guadagno raggiunto, lo registriamo qui. 'UNIQUE' sulla
+    #     coppia (posizione_id, livello_indice) e' la nostra idempotenza:
+    #     anche se il bot gira piu' volte, un livello scatta una volta sola.
+    cursore.execute("""
+        CREATE TABLE IF NOT EXISTS posizioni_aperte (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            simbolo TEXT NOT NULL,
+            quantita_originale INTEGER NOT NULL,
+            prezzo_entrata REAL NOT NULL,
+            data_apertura TEXT NOT NULL,
+            aperta INTEGER NOT NULL DEFAULT 1
+        )
+    """)
+    cursore.execute("""
+        CREATE TABLE IF NOT EXISTS take_profit_eseguiti (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            posizione_id INTEGER NOT NULL,
+            livello_indice INTEGER NOT NULL,
+            quantita_venduta INTEGER NOT NULL,
+            prezzo_vendita REAL NOT NULL,
+            data_ora TEXT NOT NULL,
+            UNIQUE(posizione_id, livello_indice)
+        )
+    """)
+
     # FASE 8: tabella per le notizie scaricate dal feed RSS gratuito.
     # 'link' e' UNIQUE apposta: e' quello che usiamo per capire se una
     # notizia l'abbiamo gia' salvata in passato, cosi' non la duplichiamo
@@ -455,3 +489,166 @@ def mostra_notizie(simbolo=None, limite=10):
         fonte_testo = fonte if fonte else "fonte sconosciuta"
         print(f"  [{data_testo}] ({fonte_testo}) {titolo}")
         print(f"    {link}")
+
+
+def apri_posizione(simbolo, quantita_originale, prezzo_entrata):
+    """
+    Registra l'apertura di una nuova posizione (dopo un BUY andato a buon
+    fine). Restituisce l'id della riga appena creata: ci servira' per
+    collegare i futuri take profit frazionati a QUESTA posizione specifica.
+    """
+    connessione = ottieni_connessione()
+    cursore = connessione.cursor()
+    cursore.execute(
+        """
+        INSERT INTO posizioni_aperte (
+            simbolo, quantita_originale, prezzo_entrata, data_apertura, aperta
+        )
+        VALUES (?, ?, ?, ?, 1)
+        """,
+        (
+            simbolo,
+            quantita_originale,
+            prezzo_entrata,
+            datetime.now().isoformat(timespec="seconds"),
+        ),
+    )
+    connessione.commit()
+    posizione_id = cursore.lastrowid
+    connessione.close()
+    return posizione_id
+
+
+def posizione_aperta_di(simbolo):
+    """
+    Restituisce la posizione attualmente aperta per 'simbolo' (la piu'
+    recente, se per assurdo ce ne fosse piu' di una), come dizionario con
+    le chiavi 'id', 'quantita_originale', 'prezzo_entrata', 'data_apertura'.
+    Restituisce None se non c'e' nessuna posizione aperta per quel simbolo.
+    """
+    connessione = ottieni_connessione()
+    cursore = connessione.cursor()
+    cursore.execute(
+        """
+        SELECT id, quantita_originale, prezzo_entrata, data_apertura
+        FROM posizioni_aperte
+        WHERE simbolo = ? AND aperta = 1
+        ORDER BY id DESC LIMIT 1
+        """,
+        (simbolo,),
+    )
+    riga = cursore.fetchone()
+    connessione.close()
+    if riga is None:
+        return None
+    return {
+        "id": riga[0],
+        "quantita_originale": riga[1],
+        "prezzo_entrata": riga[2],
+        "data_apertura": riga[3],
+    }
+
+
+def chiudi_posizione(posizione_id):
+    """
+    Segna una posizione come chiusa (dopo un SELL che ha chiuso tutto).
+    Da questo momento in poi non conta piu' per il take profit frazionato:
+    se in futuro ricompriamo lo stesso simbolo, apri_posizione() creera'
+    una riga nuova, e i livelli di take profit ripartiranno da zero.
+    """
+    connessione = ottieni_connessione()
+    cursore = connessione.cursor()
+    cursore.execute("UPDATE posizioni_aperte SET aperta = 0 WHERE id = ?", (posizione_id,))
+    connessione.commit()
+    connessione.close()
+
+
+def livelli_take_profit_eseguiti(posizione_id):
+    """
+    Restituisce l'insieme (set) degli indici dei livelli di take profit gia'
+    eseguiti per questa posizione, cosi' possiamo capire quali mancano ancora.
+    """
+    connessione = ottieni_connessione()
+    cursore = connessione.cursor()
+    cursore.execute(
+        "SELECT livello_indice FROM take_profit_eseguiti WHERE posizione_id = ?",
+        (posizione_id,),
+    )
+    righe = cursore.fetchall()
+    connessione.close()
+    return {riga[0] for riga in righe}
+
+
+def salva_take_profit_eseguito(posizione_id, livello_indice, quantita_venduta, prezzo_vendita):
+    """
+    Registra che un livello di take profit e' stato eseguito per questa
+    posizione. Chi chiama questa funzione dovrebbe aver gia' controllato
+    con livelli_take_profit_eseguiti() che questo livello non sia gia'
+    stato eseguito: il vincolo UNIQUE della tabella e' solo un secondo
+    scudo di sicurezza (stessa idea del client_order_id nella Fase 4), non
+    il controllo principale.
+
+    Usiamo 'try/finally' per essere sicuri di chiudere SEMPRE la
+    connessione al database, anche se l'INSERT fallisce (es. per il
+    vincolo UNIQUE): altrimenti la connessione resterebbe aperta e
+    bloccherebbe il file del database per le chiamate successive.
+    """
+    connessione = ottieni_connessione()
+    try:
+        cursore = connessione.cursor()
+        cursore.execute(
+            """
+            INSERT INTO take_profit_eseguiti (
+                posizione_id, livello_indice, quantita_venduta, prezzo_vendita, data_ora
+            )
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                posizione_id,
+                livello_indice,
+                quantita_venduta,
+                prezzo_vendita,
+                datetime.now().isoformat(timespec="seconds"),
+            ),
+        )
+        connessione.commit()
+    finally:
+        connessione.close()
+
+
+def mostra_take_profit():
+    """Stampa tutte le posizioni tracciate e tutti i take profit eseguiti finora (per controllo/debug)."""
+    connessione = ottieni_connessione()
+    cursore = connessione.cursor()
+
+    cursore.execute(
+        "SELECT id, simbolo, quantita_originale, prezzo_entrata, data_apertura, aperta "
+        "FROM posizioni_aperte ORDER BY id"
+    )
+    posizioni = cursore.fetchall()
+
+    cursore.execute(
+        "SELECT posizione_id, livello_indice, quantita_venduta, prezzo_vendita, data_ora "
+        "FROM take_profit_eseguiti ORDER BY id"
+    )
+    eseguiti = cursore.fetchall()
+    connessione.close()
+
+    print("\nPosizioni tracciate per il take profit frazionato (dentro bot.db):")
+    if not posizioni:
+        print("  (nessuna posizione tracciata finora)")
+    for id_pos, simbolo, quantita, prezzo, data_apertura, aperta in posizioni:
+        stato = "APERTA" if aperta else "chiusa"
+        print(
+            f"  #{id_pos} {simbolo}: {quantita} azioni @ {prezzo:,.2f} $ "
+            f"(aperta il {data_apertura}) - {stato}"
+        )
+
+    print("\nTake profit eseguiti finora:")
+    if not eseguiti:
+        print("  (nessun take profit eseguito finora)")
+    for posizione_id, livello_indice, quantita_venduta, prezzo_vendita, data_ora in eseguiti:
+        print(
+            f"  {data_ora} - posizione #{posizione_id}, livello {livello_indice}: "
+            f"venduta {quantita_venduta} azioni @ {prezzo_vendita:,.2f} $"
+        )

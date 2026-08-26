@@ -57,6 +57,16 @@ Aggiunte di questa versione (watchdog, kill switch, notifiche)
   "errore" + notifica) invece di sparire in silenzio - importante perche'
   un giorno girera' da solo, senza nessuno davanti allo schermo.
 
+Aggiunta della Fase 8: take profit frazionato
+------------------------------------------------
+  7. TAKE PROFIT FRAZIONATO (take_profit.py, tabelle posizioni_aperte e
+     take_profit_eseguiti in database.py): quando compriamo, registriamo
+     la posizione (quantita' e prezzo di carico). Ad ogni esecuzione,
+     INDIPENDENTEMENTE dal segnale della strategia di quel giorno,
+     controlliamo se il guadagno ha raggiunto una nuova soglia (Passo
+     2bis): in quel caso vendiamo un pezzo della posizione, invece di
+     aspettare solo il segnale SELL per chiudere tutto in un colpo solo.
+
 Cose importanti da sapere su questo script
 --------------------------------------------
 - Per ora gestisce UN SOLO titolo alla volta (quello scelto in
@@ -107,9 +117,19 @@ from database import (
     salva_ordine,
     mostra_ordini,
     registra_battito_cuore,
+    apri_posizione,
+    posizione_aperta_di,
+    chiudi_posizione,
+    livelli_take_profit_eseguiti,
+    salva_take_profit_eseguito,
 )
 from kill_switch import kill_switch_attivo
 from notifiche import invia_notifica
+from take_profit import (
+    calcola_guadagno_percentuale,
+    trova_livelli_da_eseguire,
+    calcola_quantita_da_vendere,
+)
 
 # Le chiavi sono gia' state lette da fase3_strategia_sma (che ha gia'
 # richiamato load_dotenv() e controllato che non fossero vuote): qui
@@ -261,6 +281,107 @@ if __name__ == "__main__":
         salva_segnale(SIMBOLO, segnale, prezzo_attuale, contesto, PERIODO_BREVE, PERIODO_LUNGO)
         print(f"Segnale: {segnale} (prezzo attuale: {prezzo_attuale:,.2f} $)")
 
+        # ----- Passo 2bis: take profit frazionato (Fase 8) -----
+        # Questo controllo e' INDIPENDENTE dal segnale della strategia qui
+        # sopra: anche in un giorno "NONE" (la maggioranza dei giorni),
+        # se abbiamo gia' una posizione aperta e tracciata (vedi
+        # apri_posizione() piu' in basso), controlliamo se il suo guadagno
+        # ha raggiunto una nuova soglia di take profit, e in quel caso
+        # vendiamo un pezzo. E' avvolto in un try/except tutto suo: un
+        # problema qui non deve mai impedire al resto dello script di
+        # valutare comunque il segnale della strategia.
+        posizione_locale = posizione_aperta_di(SIMBOLO)
+
+        if posizione_locale is not None:
+            try:
+                print(f"\n=== Passo 2bis: controllo take profit frazionato su {SIMBOLO} ===")
+
+                guadagno = calcola_guadagno_percentuale(prezzo_attuale, posizione_locale["prezzo_entrata"])
+                gia_eseguiti = livelli_take_profit_eseguiti(posizione_locale["id"])
+                livelli_da_eseguire = trova_livelli_da_eseguire(guadagno, gia_eseguiti)
+
+                print(
+                    f"Prezzo di carico: {posizione_locale['prezzo_entrata']:,.2f} $ | "
+                    f"Guadagno attuale: {guadagno * 100:.2f}% | "
+                    f"Livelli gia' eseguiti: {sorted(gia_eseguiti) if gia_eseguiti else 'nessuno'}"
+                )
+
+                if not livelli_da_eseguire:
+                    print("Nessun nuovo livello di take profit raggiunto.")
+                else:
+                    for indice_livello in livelli_da_eseguire:
+                        posizioni_attuali_tp = esegui_con_retry(
+                            lambda: client_trading.get_all_positions(),
+                            descrizione="lettura posizioni per il take profit",
+                        )
+                        posizione_alpaca = next((p for p in posizioni_attuali_tp if p.symbol == SIMBOLO), None)
+                        quantita_posseduta = int(float(posizione_alpaca.qty)) if posizione_alpaca else 0
+
+                        if quantita_posseduta <= 0:
+                            print("Non possediamo piu' azioni da vendere: mi fermo qui con il take profit.")
+                            break
+
+                        quantita_tp = calcola_quantita_da_vendere(
+                            indice_livello, posizione_locale["quantita_originale"], quantita_posseduta
+                        )
+
+                        if quantita_tp <= 0:
+                            print(f"Livello {indice_livello}: la frazione calcolata e' 0 azioni, salto.")
+                            continue
+
+                        client_order_id_tp = f"{SIMBOLO}-TP{indice_livello}-POS{posizione_locale['id']}"
+                        if client_order_id_gia_usato(client_order_id_tp):
+                            # Secondo scudo di idempotenza, stessa idea degli ordini normali.
+                            continue
+
+                        print(
+                            f"Livello {indice_livello} raggiunto (guadagno {guadagno * 100:.2f}%): "
+                            f"vendo {quantita_tp} azioni di {SIMBOLO}."
+                        )
+
+                        richiesta_tp = MarketOrderRequest(
+                            symbol=SIMBOLO,
+                            qty=quantita_tp,
+                            side=OrderSide.SELL,
+                            time_in_force=TimeInForce.DAY,
+                            client_order_id=client_order_id_tp,
+                        )
+
+                        try:
+                            ordine_tp = esegui_con_retry(
+                                lambda: client_trading.submit_order(richiesta_tp),
+                                descrizione=f"invio ordine take profit livello {indice_livello}",
+                            )
+                            salva_ordine(
+                                SIMBOLO, "SELL", quantita_tp, prezzo_attuale, client_order_id_tp,
+                                "inviato", f"take profit livello {indice_livello}",
+                            )
+                            salva_take_profit_eseguito(posizione_locale["id"], indice_livello, quantita_tp, prezzo_attuale)
+                            registra_battito_cuore(
+                                "ok", f"Take profit livello {indice_livello} su {SIMBOLO}: vendute {quantita_tp} azioni."
+                            )
+                            invia_notifica(
+                                f"Take profit su {SIMBOLO} (livello {indice_livello}): vendute {quantita_tp} "
+                                f"azioni @ ~{prezzo_attuale:,.2f}$ (guadagno {guadagno * 100:.1f}%)."
+                            )
+                        except Exception as errore_tp:
+                            print(f"Non sono riuscito a inviare l'ordine di take profit: {errore_tp}")
+                            salva_ordine(
+                                SIMBOLO, "SELL", quantita_tp, prezzo_attuale, client_order_id_tp,
+                                "errore", str(errore_tp),
+                            )
+                            registra_battito_cuore(
+                                "errore", f"Take profit livello {indice_livello} fallito su {SIMBOLO}: {errore_tp}"
+                            )
+                            invia_notifica(f"ERRORE: take profit su {SIMBOLO} (livello {indice_livello}) fallito: {errore_tp}")
+            except Exception as errore_take_profit:
+                # Il take profit e' un raffinamento, non il cuore della logica
+                # di trading: un suo errore non deve mai far crashare tutto lo
+                # script prima ancora di valutare il segnale della strategia.
+                print(f"\nAvviso: il controllo del take profit frazionato ha avuto un problema: {errore_take_profit}")
+                registra_battito_cuore("errore", f"Take profit su {SIMBOLO} fallito: {errore_take_profit}")
+                invia_notifica(f"ERRORE: controllo take profit su {SIMBOLO} fallito: {errore_take_profit}")
+
         if segnale == "NONE":
             print("\nNessun incrocio oggi: non piazzo nessun ordine. Va bene cosi'.")
             registra_battito_cuore("ok", f"Nessun incrocio su {SIMBOLO}, nessuna azione.")
@@ -392,6 +513,14 @@ if __name__ == "__main__":
                 f"Ordine {segnale} su {SIMBOLO}: {quantita} azioni @ ~{prezzo_attuale:,.2f}$ "
                 f"inviato (stato Alpaca: {ordine_inviato.status})."
             )
+
+            # FASE 8: iniziamo a tracciare questa posizione per il take
+            # profit frazionato (Passo 2bis), oppure smettiamo di tracciarla
+            # se questo era il segnale SELL che ha chiuso tutto.
+            if segnale == "BUY":
+                apri_posizione(SIMBOLO, quantita, prezzo_attuale)
+            elif posizione_locale is not None:
+                chiudi_posizione(posizione_locale["id"])
         except Exception as errore:
             print(f"\nNon sono riuscito a inviare l'ordine: {errore}")
             salva_ordine(SIMBOLO, segnale, quantita, prezzo_attuale, client_order_id, "errore", str(errore))
