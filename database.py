@@ -180,6 +180,20 @@ def inizializza_database():
         )
     """)
 
+    # FASE 8: tabella per l'analisi multi-timeframe. Ogni volta che arriva
+    # un segnale BUY dal giornaliero, registriamo cosa diceva il trend
+    # orario di brevissimo termine e se lo ha confermato o bloccato
+    # (logging contestuale, stessa idea gia' usata per la tabella 'segnali').
+    cursore.execute("""
+        CREATE TABLE IF NOT EXISTS controlli_multi_timeframe (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            data_ora TEXT NOT NULL,
+            simbolo TEXT NOT NULL,
+            trend_orario TEXT NOT NULL,
+            esito TEXT NOT NULL
+        )
+    """)
+
     connessione.commit()
     connessione.close()
 
@@ -763,3 +777,37 @@ def mostra_take_profit():
             f"  {data_ora} - posizione #{posizione_id}, livello {livello_indice}: "
             f"venduta {quantita_venduta} azioni @ {prezzo_vendita:,.2f} $"
         )
+
+
+def salva_controllo_multi_timeframe(simbolo, trend_orario, esito):
+    """
+    Salva l'esito di un controllo multi-timeframe (Fase 8): cosa diceva il
+    trend orario quando e' arrivato un segnale BUY, e se lo ha confermato
+    o bloccato.
+    """
+    connessione = ottieni_connessione()
+    cursore = connessione.cursor()
+    cursore.execute(
+        "INSERT INTO controlli_multi_timeframe (data_ora, simbolo, trend_orario, esito) VALUES (?, ?, ?, ?)",
+        (datetime.now().isoformat(timespec="seconds"), simbolo, trend_orario, esito),
+    )
+    connessione.commit()
+    connessione.close()
+
+
+def mostra_controlli_multi_timeframe(limite=20):
+    """Stampa gli ultimi controlli multi-timeframe salvati (i piu' recenti per primi)."""
+    connessione = ottieni_connessione()
+    cursore = connessione.cursor()
+    cursore.execute(
+        "SELECT data_ora, simbolo, trend_orario, esito FROM controlli_multi_timeframe ORDER BY id DESC LIMIT ?",
+        (limite,),
+    )
+    righe = cursore.fetchall()
+    connessione.close()
+
+    print("\nUltimi controlli multi-timeframe salvati (dentro bot.db):")
+    if not righe:
+        print("  (nessun controllo multi-timeframe salvato finora)")
+    for data_ora, simbolo, trend_orario, esito in righe:
+        print(f"  {data_ora} - {simbolo}: trend orario '{trend_orario}' -> {esito}")

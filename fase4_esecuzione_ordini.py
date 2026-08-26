@@ -57,8 +57,8 @@ Aggiunte di questa versione (watchdog, kill switch, notifiche)
   "errore" + notifica) invece di sparire in silenzio - importante perche'
   un giorno girera' da solo, senza nessuno davanti allo schermo.
 
-Aggiunta della Fase 8: take profit frazionato
-------------------------------------------------
+Aggiunte della Fase 8: take profit frazionato e analisi multi-timeframe
+--------------------------------------------------------------------------
   7. TAKE PROFIT FRAZIONATO (take_profit.py, tabelle posizioni_aperte e
      take_profit_eseguiti in database.py): quando compriamo, registriamo
      la posizione (quantita' e prezzo di carico). Ad ogni esecuzione,
@@ -66,6 +66,15 @@ Aggiunta della Fase 8: take profit frazionato
      controlliamo se il guadagno ha raggiunto una nuova soglia (Passo
      2bis): in quel caso vendiamo un pezzo della posizione, invece di
      aspettare solo il segnale SELL per chiudere tutto in un colpo solo.
+
+  8. ANALISI MULTI-TIMEFRAME (fase8_multi_timeframe.py): prima di
+     eseguire un BUY, oltre al filtro di liquidita', controlliamo anche
+     il trend delle candele ORARIE (non solo quelle giornaliere): se il
+     brevissimo termine e' chiaramente in discesa, contraddicendo il
+     segnale giornaliero, aspettiamo invece di comprare subito. Si
+     applica solo al BUY, mai al SELL (una posizione aperta deve poter
+     essere sempre chiusa), e non blocca mai per "dati insufficienti" -
+     solo quando il trend orario e' chiaramente contrario.
 
 Cose importanti da sapere su questo script
 --------------------------------------------
@@ -94,6 +103,7 @@ from fase3_strategia_sma import (
     PERIODO_LUNGO,
     scarica_prezzi_di_chiusura,
     scarica_volume_medio,
+    scarica_prezzi_orari,
     calcola_medie_mobili,
     decidi_segnale,
     api_key,
@@ -122,6 +132,7 @@ from database import (
     chiudi_posizione,
     livelli_take_profit_eseguiti,
     salva_take_profit_eseguito,
+    salva_controllo_multi_timeframe,
 )
 from kill_switch import kill_switch_attivo
 from notifiche import invia_notifica
@@ -129,6 +140,11 @@ from take_profit import (
     calcola_guadagno_percentuale,
     trova_livelli_da_eseguire,
     calcola_quantita_da_vendere,
+)
+from fase8_multi_timeframe import (
+    calcola_trend_orario,
+    conferma_segnale_BUY,
+    ORE_STORIA_DA_RICHIEDERE as ORE_STORIA_ORARIA,
 )
 
 # Le chiavi sono gia' state lette da fase3_strategia_sma (che ha gia'
@@ -425,6 +441,39 @@ if __name__ == "__main__":
                 )
                 registra_battito_cuore("ok", f"Segnale BUY ma liquidita' insufficiente su {SIMBOLO}, nessuna azione.")
                 raise SystemExit(0)
+
+            # FASE 8: analisi multi-timeframe - oltre al segnale
+            # giornaliero, controlliamo anche il trend orario di
+            # brevissimo termine come "secondo parere" prima di comprare
+            # (stessa logica del filtro di liquidita' qui sopra: si
+            # applica solo al BUY, mai al SELL, per poter sempre chiudere
+            # una posizione gia' aperta).
+            prezzi_orari = esegui_con_retry(
+                lambda: scarica_prezzi_orari(SIMBOLO, ore=ORE_STORIA_ORARIA),
+                descrizione="lettura prezzi orari per l'analisi multi-timeframe",
+            )
+            trend_orario = calcola_trend_orario(prezzi_orari)
+            segnale_confermato = conferma_segnale_BUY(trend_orario)
+            salva_controllo_multi_timeframe(
+                SIMBOLO, trend_orario, "confermato" if segnale_confermato else "bloccato"
+            )
+
+            if not segnale_confermato:
+                print(
+                    f"\nSegnale BUY ma il trend orario di brevissimo termine e' in "
+                    f"'{trend_orario}': non compro, aspetto una conferma migliore "
+                    "(analisi multi-timeframe)."
+                )
+                salva_ordine(
+                    SIMBOLO, segnale, 0, prezzo_attuale, client_order_id, "saltato",
+                    f"trend orario non conferma il segnale (trend: {trend_orario})",
+                )
+                registra_battito_cuore(
+                    "ok", f"Segnale BUY ma trend orario '{trend_orario}' su {SIMBOLO}, nessuna azione."
+                )
+                raise SystemExit(0)
+
+            print(f"Trend orario di brevissimo termine: '{trend_orario}' -> segnale confermato.")
 
             stop_loss = calcola_stop_loss(prezzo_attuale)
             sizing = calcola_dimensione_posizione(valore_portafoglio, prezzo_attuale, stop_loss)

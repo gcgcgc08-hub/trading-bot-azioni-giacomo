@@ -222,6 +222,38 @@ def scarica_volume_medio(simbolo=SIMBOLO, giorni=GIORNI_STORIA_DA_RICHIEDERE, pe
     return float(volumi.tail(periodo_media).mean())
 
 
+def scarica_prezzi_orari(simbolo=SIMBOLO, ore=360):
+    """
+    FASE 8: come scarica_prezzi_di_chiusura(), ma con candele ORARIE invece
+    che giornaliere (TimeFrame.Hour invece di TimeFrame.Day). Serve
+    all'analisi multi-timeframe (fase8_multi_timeframe.py): oltre al
+    segnale calcolato sul giornaliero, vogliamo controllare anche il trend
+    delle ultime ore, per capire se il brevissimo termine conferma o
+    contraddice il segnale del giorno.
+
+    'ore' e' in ORE DI CALENDARIO (comprese le ore in cui il mercato e'
+    chiuso, non solo quelle di borsa aperta): ne chiediamo parecchie di
+    piu' di quelle "di borsa" che servirebbero davvero, per essere sicuri
+    di avere abbastanza candele orarie anche contando weekend e notti.
+
+    E' una chiamata di rete separata dalle altre due (stessa scelta gia'
+    fatta per scarica_volume_medio): la teniamo divisa per semplicita' e
+    per non rischiare di rompere le funzioni gia' testate e funzionanti.
+    """
+    adesso_utc = datetime.now(timezone.utc)
+    inizio = adesso_utc - timedelta(hours=ore)
+
+    richiesta = StockBarsRequest(
+        symbol_or_symbols=simbolo,
+        timeframe=TimeFrame.Hour,
+        start=inizio,
+        feed=DataFeed.IEX,
+    )
+    barre = client_dati.get_stock_bars(richiesta)
+    prezzi = barre.df.xs(simbolo).sort_index()["close"]
+    return prezzi
+
+
 # ---------------------------------------------------------------------------
 # PROGRAMMA PRINCIPALE
 # ---------------------------------------------------------------------------
